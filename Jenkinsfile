@@ -1,37 +1,93 @@
 pipeline {
-    agent any 
+    agent any
 
     environment {
-        DOCKER_CREDENTIALS_ID = 'roseaw-dockerhub'  
-        DOCKER_IMAGE = 'cithit/adamscd5'                                   //<-----change this to your MiamiID!
+        DOCKER_CREDENTIALS_ID = 'roseaw-dockerhub'
+        DOCKER_IMAGE = 'cithit/adamscd5'
         IMAGE_TAG = "build-${BUILD_NUMBER}"
-        GITHUB_URL = 'https://github.com/ColbyAdams12/225-lab4-1.git'     //<-----change this to match this new repository!
-        KUBECONFIG = credentials('adamscd5-225')                           //<-----change this to match your kubernetes credentials (MiamiID-225)! 
+        GITHUB_URL = 'https://github.com/ColbyAdams12/225-lab4-1.git'
+        KUBECONFIG = credentials('adamscd5-225')
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 cleanWs()
-                checkout([$class: 'GitSCM', branches: [[name: '*/main']],
-                          userRemoteConfigs: [[url: "${GITHUB_URL}"]]])
+                checkout([$class: 'GitSCM',
+                    branches: [[name: '*/main']],
+                    userRemoteConfigs: [[url: "${GITHUB_URL}"]]])
+            }
+        }
+
+        // Install Python tools inside a Docker container
+        stage('Install Testing Tools') {
+            steps {
+                sh '''
+                    docker run --rm \
+                      -v "$PWD:/app" -w /app \
+                      python:3.12-slim \
+                      sh -c "python -m pip install --quiet flask pytest bandit pip-audit && python -m pip freeze > /dev/null"
+                '''
+            }
+        }
+
+        // Test the Flask application's home page
+        stage('Python Tests') {
+            steps {
+                sh '''
+                    docker run --rm \
+                      -v "$PWD:/app" -w /app \
+                      python:3.12-slim \
+                      sh -c "python -m pip install --quiet -r requirements.txt pytest && python -m pytest tests_main.py -v"
+                '''
+            }
+        }
+
+        // Scan Python code for security problems
+        stage('Security Scan') {
+            steps {
+                sh '''
+                    docker run --rm \
+                      -v "$PWD:/app" -w /app \
+                      python:3.12-slim \
+                      sh -c "python -m pip install --quiet bandit && python -m bandit -r main.py"
+                '''
+            }
+        }
+
+        // Scan dependencies for known vulnerabilities
+        stage('Dependency Scan') {
+            steps {
+                sh '''
+                    docker run --rm \
+                      -v "$PWD:/app" -w /app \
+                      python:3.12-slim \
+                      sh -c "python -m pip install --quiet pip-audit && python -m pip_audit -r requirements.txt"
+                '''
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 script {
-                    docker.withRegistry('https://registry.hub.docker.com', 'roseaw-dockerhub') {
+                    docker.withRegistry(
+                        'https://registry.hub.docker.com',
+                        "${DOCKER_CREDENTIALS_ID}"
+                    ) {
                         docker.build("${DOCKER_IMAGE}:${IMAGE_TAG}")
+                    }
                 }
             }
-        }
         }
 
         stage('Push Docker Image') {
             steps {
                 script {
-                    docker.withRegistry('https://index.docker.io/v1/', "${DOCKER_CREDENTIALS_ID}") {
+                    docker.withRegistry(
+                        'https://index.docker.io/v1/',
+                        "${DOCKER_CREDENTIALS_ID}"
+                    ) {
                         docker.image("${DOCKER_IMAGE}:${IMAGE_TAG}").push()
                     }
                 }
@@ -41,15 +97,14 @@ pipeline {
         stage('Deploy to Dev Environment') {
             steps {
                 script {
-                    // This sets up the Kubernetes configuration using the specified KUBECONFIG
-                    def kubeConfig = readFile(KUBECONFIG)
-                    // This updates the deployment-dev.yaml to use the new image tag
-                    sh "sed -i 's|${DOCKER_IMAGE}:latest|${DOCKER_IMAGE}:${IMAGE_TAG}|' deployment-dev.yaml"
-                    sh "kubectl apply -f deployment-dev.yaml"
+                    sh """
+                        sed -i 's|${DOCKER_IMAGE}:latest|${DOCKER_IMAGE}:${IMAGE_TAG}|' deployment-dev.yaml
+                        kubectl apply -f deployment-dev.yaml
+                    """
                 }
             }
         }
-        
+
         stage('Check Kubernetes Cluster') {
             steps {
                 script {
@@ -60,15 +115,17 @@ pipeline {
     }
 
     post {
-
         success {
-            slackSend color: "good", message: "Build Completed: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
+            slackSend color: "good",
+                message: "Build Completed: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
         }
         unstable {
-            slackSend color: "warning", message: "Build Completed: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
+            slackSend color: "warning",
+                message: "Build Completed: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
         }
         failure {
-            slackSend color: "danger", message: "Build Completed: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
+            slackSend color: "danger",
+                message: "Build Completed: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
         }
     }
 }
