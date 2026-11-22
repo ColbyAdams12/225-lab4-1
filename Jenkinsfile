@@ -39,7 +39,7 @@ pipeline {
                     docker run --rm \
                       -v "$PWD:/app" -w /app \
                       python:3.12-slim \
-                      sh -c "python -m pip install --quiet -r requirements.txt pytest && python -m pytest tests_main.py -v"
+                      sh -c "python -m pip install --quiet -r requirements.txt pytest && python -m pytest tests/tests_main.py -v"
                 '''
             }
         }
